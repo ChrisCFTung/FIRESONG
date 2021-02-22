@@ -33,6 +33,8 @@ def firesong_simulation(outputdir,
                         emax=1e7,
                         seed=None,
                         zNEAR=-1,
+                        return_as_generator=False,
+                        generator_bunchsize=10000,
                         verbose=True):
 
     if Transient:
@@ -88,48 +90,59 @@ def firesong_simulation(outputdir,
     # IMPORTANT notice, in the following "flux" means fluence in
     # Transient mode, but flux in steady source mode,
     # until TotalFlux(TotalFluence) is calculated
-    
+    if (N_sample < generator_bunchsize) or not return_as_generator:
+        generator_bunchsize = N_sample
+
+    source_idx = np.arange(N_sample)
+    splits = [len(split) for split in np.split(source_idx,
+                                               source_idx[::generator_bunchsize][1:])]
+    TotalFlux = 0.
+
     # sample source
-    zs = invCDF(rng.uniform(low=0.0, high=1.0, size = N_sample))
-    lumis = luminosity_function.sample_distribution(nsources=N_sample, rng=rng)
-    if np.ndim(lumis) < 1:
-        lumis = np.array([lumis]*N_sample)
-    fluxes = population.Lumi2Flux(lumis, index, emin, emax, zs)
-    # Random declination over the entire sky
-    sinDecs = rng.uniform(-1, 1, size=N_sample)
-    declins = np.degrees(np.arcsin(sinDecs))
+    for splitnum, N_split in enumerate(splits):
+        zs = invCDF(rng.uniform(low=0.0, high=1.0, size = N_split))
+        lumis = luminosity_function.sample_distribution(nsources=N_split, rng=rng)
+        if np.ndim(lumis) < 1:
+            lumis = np.array([lumis]*N_split)
+        fluxes = population.Lumi2Flux(lumis, index, emin, emax, zs)
+        # Random declination over the entire sky
+        sinDecs = rng.uniform(-1, 1, size=N_split)
+        declins = np.degrees(np.arcsin(sinDecs))
 
-    TotalFlux = np.sum(fluxes)
+        TotalFlux += np.sum(fluxes)
 
-    # For transient sources, the flux measured on Earth will be
-    # red-shifted-fluence/{(1+z)*burst duration}
-    if Transient:
-        fluxes = population.fluence2flux(fluxes, zs)
+        # For transient sources, the flux measured on Earth will be
+        # red-shifted-fluence/{(1+z)*burst duration}
+        if Transient:
+            fluxes = population.fluence2flux(fluxes, zs)
 
-    if filename is None:
-        sources['dec'] = declins
-        sources['flux'] = fluxes
-        sources['z'] = zs
-    else:
-        out.write(declins, zs, fluxes)
+        if filename is None:
+            sources['dec'] = declins
+            sources['flux'] = fluxes
+            sources['z'] = zs
+        else:
+            out.write(declins, zs, fluxes)
 
-    # For transient source, we calculate the total fluence from all sources,
-    # then obtain the diffuse flux by doing a time average over a year
-    if Transient:
-        TotalFlux = TotalFlux / population.yr2sec
-    TotalFlux /= 4*np.pi  # give in per sr
+        # For transient source, we calculate the total fluence from all sources,
+        # then obtain the diffuse flux by doing a time average over a year
+        ScaledTotalFlux = TotalFlux
+        if Transient:
+            ScaledTotalFlux = TotalFlux / population.yr2sec
+        ScaledTotalFlux /= 4*np.pi  # give in per sr
 
-    if filename is None:
-        results['total_flux'] = TotalFlux
-        results['sources'] = sources
-    else:
-        out.finish(TotalFlux)
-    if verbose:
-        print("Actual diffuse flux simulated :")
-        log = "E^2 dNdE = {TotalFlux} (E/100 TeV)^({delta_gamma}) [GeV/cm^2.s.sr]"
-        print(log.format(**locals()))
-    if filename is None:
-        return results
+        if filename is None:
+            results['total_flux'] = ScaledTotalFlux
+            results['sources'] = sources
+        else:
+            out.finish(TotalFlux)
+        if verbose:
+            print("Actual diffuse flux simulated :")
+            log = "E^2 dNdE = {ScaledTotalFlux} (E/100 TeV)^({delta_gamma}) [GeV/cm^2.s.sr]"
+            print(log.format(**locals()))
+        if return_as_generator:
+            yield results
+        elif filename is None:
+            return results
 
 if __name__ == "__main__":
     outputdir = get_outputdir()
